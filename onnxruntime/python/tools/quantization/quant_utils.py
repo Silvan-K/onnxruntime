@@ -98,15 +98,11 @@ ONNX_TYPE_TO_NP_TYPE = {
     onnx_proto.TensorProto.UINT8:  numpy.dtype('uint8')
 }
 
-def quantize_nparray(qType, arr, scale, zero_point, low=None, high=None):
-    assert qType in ONNX_TYPE_TO_NP_TYPE, \
-        "Unexpected data type {} requested. Only INT8 and UINT8 are supported.".format(qType)
-    dtype = ONNX_TYPE_TO_NP_TYPE[qType]
-    cliplow = max(0 if dtype == numpy.uint8 else -127, -127 if low is None else low)
-    cliphigh = min(255 if dtype == numpy.uint8 else 127, 255 if high is None else high)
+def quantize_nparray(qType, arr, scale, zero_point):
+    qmin, qmax = get_qmin_qmax_for_qType(qType)
     arr_fp32 = numpy.asarray((arr.astype(numpy.float32) / scale).round() + zero_point)
-    numpy.clip(arr_fp32, cliplow, cliphigh, out=arr_fp32)
-    return arr_fp32.astype(dtype)
+    numpy.clip(arr_fp32, qmin, qmax, out=arr_fp32)
+    return arr_fp32.astype(ONNX_TYPE_TO_NP_TYPE[qType])
 
 
 def compute_scale_zp(rmin, rmax, qmin, qmax, symmetric=False):
@@ -136,11 +132,14 @@ def compute_scale_zp(rmin, rmax, qmin, qmax, symmetric=False):
     rmax = max(rmax, 0)
 
     if symmetric:
-        absmax = max(abs(rmin), abs(rmax))
-        rmin = -absmax
-        rmax = +absmax
+        absqmin = min(abs(qmin), abs(qmax))
+        absrmax = max(abs(rmin), abs(rmax))
+        qmin = -absqmin
+        qmax = +absqmin
+        rmin = -absrmax
+        rmax = +absrmax
 
-    scale = (rmax - rmin) / float(qmax-qmin) if rmax!=rmin else 1.0
+    scale = (rmax - rmin) / float(qmax-qmin) if rmax!=rmin else 1.0 # rmin/qmin
     zero_point = round(qmin - rmin/scale)
 
     return [zero_point, scale]
@@ -181,7 +180,7 @@ def get_qmin_qmax_for_qType(qType, reduce_range=False):
     if qType == onnx_proto.TensorProto.UINT8:
         (qmin, qmax) = (0,127) if reduce_range else (0,255)
     elif qType == onnx_proto.TensorProto.INT8:
-        (qmin, qmax) = (-64,64) if reduce_range else (-127,127)
+        (qmin, qmax) = (-64,64) if reduce_range else (-128,127)
     else:
         raise ValueError("Unexpected data type {} requested. Only INT8 and UINT8 are supported.".format(qType))
     return qmin, qmax
