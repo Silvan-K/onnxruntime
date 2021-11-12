@@ -127,6 +127,74 @@ class TestSymmetricFlag(unittest.TestCase):
     # zero point == 0 (regardless of flag)
     self.assertEqual(wgt_zp, 0)
 
+
+class TestSymmetricFlagExceptions(unittest.TestCase):
+
+
+  def perform_quantization(self, act_type, act_sym, wgt_type, wgt_sym):
+
+    activations  = [-1*np.ones([1, 2, 32, 32], dtype="float32"),
+                    +1*np.ones([1, 2, 32, 32], dtype="float32")]
+    
+    weights  = np.concatenate((-1*np.ones([1, 1,  2,  2], dtype="float32"),
+                               +2*np.ones([1, 1,  2,  2], dtype="float32")), axis = 1)
+
+    
+    # Set up one-layer convolution model
+    act = helper.make_tensor_value_info("ACT", TensorProto.FLOAT, activations[0].shape)
+    wgt = helper.make_tensor_value_info("WGT", TensorProto.FLOAT, weights.shape)
+    res = helper.make_tensor_value_info("RES", TensorProto.FLOAT, [None, None, None, None])
+    wgt_init = numpy_helper.from_array(weights, "WGT")
+    conv_node = onnx.helper.make_node("Conv", ["ACT", "WGT"], ["RES"])
+    graph = helper.make_graph([conv_node], "test", [act], [res], initializer=[wgt_init])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
+    onnx.save(model, "model.onnx")
+
+    # Quantize model
+    class DummyDataReader(quantization.CalibrationDataReader):
+      def __init__(self):
+        self.iterator = ({"ACT": act} for act in activations)
+      def get_next(self):
+        return next(self.iterator, None)
+      
+    quantization.quantize_static(model_input="model.onnx",
+                                 model_output="quantized-model.onnx",
+                                 calibration_data_reader=DummyDataReader(),
+                                 activation_type=act_type,
+                                 weight_type=wgt_type,
+                                 op_types_to_quantize=["Conv", "MatMul"],
+                                 extra_options = {"WeightSymmetric": wgt_sym,
+                                                  "ActivationSymmetric": act_sym})
+
+  def test_sane(self):
+
+    # Test that we don't get any errors running with sane parameters
+    self.perform_quantization(act_type = quantization.QuantType.QInt8,
+                              wgt_type = quantization.QuantType.QInt8,
+                              act_sym  = True,
+                              wgt_sym  = True)
+
+  def test_inconsistent_act(self):
+
+    # Use unsigned activations with symmetrization set to true, should raise
+    def bad_call():
+      return self.perform_quantization(act_type = quantization.QuantType.QUInt8,
+                                       wgt_type = quantization.QuantType.QInt8,
+                                       act_sym  = True,
+                                       wgt_sym  = True)
+    self.assertRaises(ValueError, bad_call)
+
+  def test_inconsistent_wgt(self):
+
+    # Use unsigned weights with symmetrization set to true, should raise
+    def bad_call():
+      return self.perform_quantization(act_type = quantization.QuantType.QInt8,
+                                       wgt_type = quantization.QuantType.QUInt8,
+                                       act_sym  = True,
+                                       wgt_sym  = True)
+    self.assertRaises(ValueError, bad_call)
+
+    
 if __name__ == '__main__':
   
     unittest.main()

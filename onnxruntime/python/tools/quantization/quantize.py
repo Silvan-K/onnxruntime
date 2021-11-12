@@ -191,6 +191,12 @@ def quantize_static(model_input,
 
     '''
 
+    if activation_type==QuantType.QUInt8 and extra_options.get("ActivationSymmetric", False):
+        raise ValueError("activation_type={activation_type} doesn't support symmetrization")
+    
+    if weight_type==QuantType.QUInt8 and extra_options.get("WeightSymmetric", False):
+        raise ValueError("weight_type={weight_type} doesn't support symmetrization")
+
     mode = QuantizationMode.QLinearOps
 
     if not op_types_to_quantize or len(op_types_to_quantize) == 0:
